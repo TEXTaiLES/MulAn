@@ -293,12 +293,19 @@ class AnnotationService:
         if meaningful and not overwrite:
             raise ApiError("overwrite_required", "The current annotation contains edits; explicit overwrite is required.", 409)
         mask, classes = self._read_import(mask_upload, metadata_upload, metadata["width"], metadata["height"])
+        self._record_patch(
+            annotation_id,
+            (0, 0, metadata["width"], metadata["height"]),
+            current,
+            mask,
+            old_state={"classes": metadata["classes"], "next_class_id": metadata["next_class_id"]},
+            new_state={"classes": classes, "next_class_id": max(item["id"] for item in classes) + 1},
+        )
         self._save_mask(annotation_id, mask)
         metadata["classes"] = classes
         metadata["next_class_id"] = max(item["id"] for item in classes) + 1
         metadata["revision"] += 1
         self._save_metadata(annotation_id, metadata)
-        self._clear_history(annotation_id)
         return self.get(annotation_id)
 
     def _clear_history(self, annotation_id: str) -> None:
@@ -382,13 +389,26 @@ class AnnotationService:
         history = self.store.read_json("annotations", annotation_id, "history.json")
         return {"revision": metadata["revision"], "saved_revision": metadata["saved_revision"], "can_undo": bool(history["undo"]), "can_redo": bool(history["redo"])}
 
-    def _record_patch(self, annotation_id: str, bbox: tuple[int, int, int, int], old: np.ndarray, new: np.ndarray) -> None:
+    def _record_patch(
+        self,
+        annotation_id: str,
+        bbox: tuple[int, int, int, int],
+        old: np.ndarray,
+        new: np.ndarray,
+        *,
+        old_state: dict | None = None,
+        new_state: dict | None = None,
+    ) -> None:
         history = self.store.read_json("annotations", annotation_id, "history.json")
         directory = self._dir(annotation_id) / "history"
         for entry in history["redo"]:
             (directory / entry).unlink(missing_ok=True)
         filename = f"{uuid.uuid4()}.npz"
-        np.savez_compressed(directory / filename, bbox=np.asarray(bbox, dtype=np.int32), old=old, new=new)
+        patch = {"bbox": np.asarray(bbox, dtype=np.int32), "old": old, "new": new}
+        if old_state is not None and new_state is not None:
+            patch["old_state"] = np.asarray(json.dumps(old_state))
+            patch["new_state"] = np.asarray(json.dumps(new_state))
+        np.savez_compressed(directory / filename, **patch)
         history["redo"] = []
         history["undo"].append(filename)
         while len(history["undo"]) > 50:
@@ -402,20 +422,29 @@ class AnnotationService:
         if not source:
             raise ApiError(f"nothing_to_{direction}", f"There is nothing to {direction}.", 409)
         filename = source.pop()
+        restored_state = None
         try:
             with np.load(self._dir(annotation_id) / "history" / filename, allow_pickle=False) as patch:
                 x0, y0, x1, y1 = (int(value) for value in patch["bbox"])
                 values = patch["old"] if direction == "undo" else patch["new"]
                 mask = self._load_mask(annotation_id)
                 mask[y0:y1, x0:x1] = values
+                state_key = "old_state" if direction == "undo" else "new_state"
+                if state_key in patch.files:
+                    restored_state = json.loads(str(patch[state_key].item()))
         except (OSError, ValueError, KeyError) as exc:
             raise ApiError("history_corrupt", "Annotation history is unreadable.", 500) from exc
         self._save_mask(annotation_id, mask)
         target = "redo" if direction == "undo" else "undo"
         history[target].append(filename)
+        if restored_state is not None:
+            metadata["classes"] = restored_state["classes"]
+            metadata["next_class_id"] = restored_state["next_class_id"]
         metadata["revision"] += 1
         self._save_metadata(annotation_id, metadata)
         self.store.write_json("annotations", annotation_id, history, "history.json")
+        if restored_state is not None:
+            return self.get(annotation_id)
         return {"revision": metadata["revision"], "saved_revision": metadata["saved_revision"], "can_undo": bool(history["undo"]), "can_redo": bool(history["redo"])}
 
     def undo(self, annotation_id: str) -> dict:

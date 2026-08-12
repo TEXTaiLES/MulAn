@@ -84,7 +84,7 @@ Image sources are stored unchanged. Previews are disposable normalized PNGs. Ann
 
 1. **Convert:** add grayscale and/or RGB BMP files, arrange the file groups from lower to higher wavelength using the on-screen guide, optionally name the expanded bands, convert, and download the TIFF. Evident grayscale filenames such as `700.bmp`, `700nm.bmp`, or `wavelength_700.bmp` initialize an editable `700nm` channel name. Grayscale contributes one band; RGB contributes grouped `R`, `G`, `B` bands without changing pixel values.
 2. **Viewer:** upload a TIFF, move between single channels or a thumbnail grid, zoom/pan, and open the same `image_id` in Annotator.
-3. **Annotator:** create stable-ID classes; brush, erase, lasso, or rectangle in source coordinates; change spectral channels without changing the mask; undo/redo; optionally replace the mask after confirmation; save and export the mask package with or without the original image.
+3. **Annotator:** create stable-ID classes; use `H` for pan, `B` for brush, `E` for eraser, `L`/`Shift+L` for lasso add/subtract, and `R`/`Shift+R` for rectangle add/subtract; change spectral channels without changing the mask; undo/redo drawing and applied masks; optionally replace the mask after confirmation; save and export the mask package with or without the original image.
 
 The standalone API is documented in [API.md](API.md).
 

@@ -81,6 +81,8 @@ curl -o annotation.zip \
   "http://localhost:5000/api/v1/annotations/ANNOTATION_ID/export?include_image=true"
 ```
 
+Mask replacement is recorded in the same bounded history used by annotation operations. The internal undo and redo endpoints restore both mask pixels and imported class metadata.
+
 Class endpoints are `POST /annotations/{id}/classes`, `PATCH /annotations/{id}/classes/{class_id}`, and `DELETE /annotations/{id}/classes/{class_id}`. Class 0 cannot be deleted; deleting another class changes only matching mask pixels to 0 and never renumbers other IDs.
 
 ## UI editing endpoints

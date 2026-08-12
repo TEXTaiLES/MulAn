@@ -98,6 +98,44 @@ def test_mask_import_validation_and_placeholders(client, annotation):
     assert overwritten.status_code == 200
 
 
+def test_mask_apply_uses_shared_undo_redo_history(client, annotation):
+    aid = annotation["annotation_id"]
+    original_class = add_class(client, aid, "Original")
+    revision = client.get(f"/api/v1/annotations/{aid}").get_json()["revision"]
+    painted = operation(client, aid, revision, "rectangle_add", original_class["id"], [{"x": 1, "y": 1}, {"x": 4, "y": 4}])
+    assert painted.status_code == 200
+    original_mask, _ = read_mask(client.get(f"/api/v1/annotations/{aid}/mask"))
+
+    imported_mask = np.zeros((10, 12), np.uint16)
+    imported_mask[5:8, 6:10] = 5
+    applied = client.put(
+        f"/api/v1/annotations/{aid}/mask",
+        data={"mask": tiff(imported_mask, "mask.tif"), "overwrite": "true"},
+        content_type="multipart/form-data",
+    )
+    assert applied.status_code == 200
+    assert applied.get_json()["can_undo"] is True and applied.get_json()["can_redo"] is False
+    assert [item["id"] for item in applied.get_json()["classes"]] == [0, 5]
+    current_mask, _ = read_mask(client.get(f"/api/v1/annotations/{aid}/mask"))
+    np.testing.assert_array_equal(current_mask, imported_mask)
+
+    undone = client.post(f"/api/internal/v1/annotations/{aid}/undo").get_json()
+    assert undone["can_undo"] is True and undone["can_redo"] is True
+    assert [item["id"] for item in undone["classes"]] == [0, original_class["id"]]
+    restored_mask, _ = read_mask(client.get(f"/api/v1/annotations/{aid}/mask"))
+    np.testing.assert_array_equal(restored_mask, original_mask)
+
+    redone = client.post(f"/api/internal/v1/annotations/{aid}/redo").get_json()
+    assert [item["id"] for item in redone["classes"]] == [0, 5]
+    redone_mask, _ = read_mask(client.get(f"/api/v1/annotations/{aid}/mask"))
+    np.testing.assert_array_equal(redone_mask, imported_mask)
+
+    undone_again = client.post(f"/api/internal/v1/annotations/{aid}/undo").get_json()
+    edited = operation(client, aid, undone_again["revision"], "brush_add", original_class["id"], [{"x": 10, "y": 8}], radius=1)
+    assert edited.status_code == 200 and edited.get_json()["can_redo"] is False
+    assert client.post(f"/api/internal/v1/annotations/{aid}/redo").status_code == 409
+
+
 def test_mask_metadata_conflict_rejected(client, annotation):
     aid = annotation["annotation_id"]
     metadata = io.BytesIO(json.dumps({"format": "mulan-semantic-segmentation", "version": "1.0", "image": {"width": 99, "height": 10}, "mask": {"background_id": 0, "ignore_id": None}, "classes": [{"id": 0, "name": "Background", "description": "", "color": "#000000"}]}).encode())
