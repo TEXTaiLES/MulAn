@@ -1,0 +1,16 @@
+services:
+  mulan:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      MULAN_DATA_DIR: /data
+      MULAN_RESOURCE_TTL_HOURS: ${MULAN_RESOURCE_TTL_HOURS:-24}
+      MULAN_MAX_UPLOAD_MB: ${MULAN_MAX_UPLOAD_MB:-512}
+    volumes:
+      - mulan-data:/data
+    restart: unless-stopped
+
+volumes:
+  mulan-data:
+
