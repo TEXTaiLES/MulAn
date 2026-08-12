@@ -29,7 +29,7 @@ function useRemoteImage(url: string | null) {
 }
 
 function ClassDialog({ existing, onClose, onSubmit }: { existing?: AnnotationClass; onClose: () => void; onSubmit: (value: Pick<AnnotationClass, 'name' | 'description' | 'color'>) => void }) {
-  const [name, setName] = useState(existing?.name || ''); const [description, setDescription] = useState(existing?.description || ''); const [color, setColor] = useState(existing?.color || '#E53935')
+  const [name, setName] = useState(existing?.name || ''); const [description, setDescription] = useState(existing?.description || ''); const [color, setColor] = useState(existing?.color || '#735FA4')
   return <Dialog title={existing ? `Edit ${existing.name}` : 'Add class'} onClose={onClose}><label>Name<input autoFocus value={name} onChange={event => setName(event.target.value)} /></label><label>Description<textarea value={description} onChange={event => setDescription(event.target.value)} /></label><label>Display color<input type="color" value={color} onChange={event => setColor(event.target.value)} /></label><div className="dialog-actions"><button onClick={onClose}>Cancel</button><button className="primary" disabled={!name.trim()} onClick={() => onSubmit({ name: name.trim(), description, color })}>{existing ? 'Save class' : 'Add class'}</button></div></Dialog>
 }
 

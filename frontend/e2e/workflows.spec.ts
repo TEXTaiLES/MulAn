@@ -27,7 +27,7 @@ test('Workflow A: BMP reorder, conversion, result, and TIFF download', async ({ 
   await expect(page.locator('.band-row').first()).toContainText('850.bmp')
   await page.getByLabel('Channel 1 name').fill('850nm'); await page.getByLabel('Channel 2 name').fill('450nm')
   await page.getByRole('button', { name: 'Convert to TIF' }).click()
-  await expect(page).toHaveURL(/\/convert\/result\//); await expect(page.getByRole('heading', { name: 'Your TIFF is ready' })).toBeVisible()
+  await expect(page).toHaveURL(/\/convert\/result\//); await expect(page.getByRole('heading', { name: 'TIFF conversion result' })).toBeVisible()
   const download = page.waitForEvent('download'); await page.getByRole('link', { name: 'Download TIF' }).click(); expect((await download).suggestedFilename()).toMatch(/\.tif$/)
 })
 
