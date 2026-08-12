@@ -12,6 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MULAN_RESOURCE_TTL_HOURS=24 \
     MULAN_MAX_UPLOAD_MB=512
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md ./
 COPY backend/ ./backend/
 COPY --from=frontend-build /build/frontend/dist/ ./backend/mulan/static/
