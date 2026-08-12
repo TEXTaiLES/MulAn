@@ -77,6 +77,31 @@ describe('annotator class and save state', () => {
     editable.remove()
   })
 
+  it('uses standard undo and redo shortcuts outside editable fields', async () => {
+    annotation = { ...annotation, can_undo: true }
+    view(); await screen.findByText('Semantic layers')
+    expect(screen.getByLabelText('Undo')).toHaveAttribute('title', 'Undo (Ctrl/Cmd+Z)')
+    expect(screen.getByLabelText('Redo')).toHaveAttribute('title', 'Redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y)')
+
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true })
+    await waitFor(() => expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(call => String(call[0]).endsWith('/undo'))).toBe(true))
+    fireEvent.keyDown(window, { key: 'z', metaKey: true, shiftKey: true })
+    await waitFor(() => expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(call => String(call[0]).endsWith('/redo'))).toBe(true))
+    fireEvent.keyDown(window, { key: 'z', metaKey: true })
+    await waitFor(() => expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(call => String(call[0]).endsWith('/undo'))).toHaveLength(2))
+    fireEvent.keyDown(window, { key: 'y', ctrlKey: true })
+    await waitFor(() => expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(call => String(call[0]).endsWith('/redo'))).toHaveLength(2))
+    await waitFor(() => expect(screen.getByLabelText('Redo')).toBeDisabled())
+    fireEvent.keyDown(window, { key: 'y', ctrlKey: true })
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(call => String(call[0]).endsWith('/redo'))).toHaveLength(2)
+
+    const input = document.createElement('input'); document.body.append(input)
+    const historyCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    fireEvent.keyDown(input, { key: 'z', ctrlKey: true })
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(historyCalls)
+    input.remove()
+  })
+
   it('routes Apply Mask through shared undo and redo controls', async () => {
     annotation = { ...annotation, revision: 2, saved_revision: 0 }
     view(); await screen.findByText('Semantic layers')

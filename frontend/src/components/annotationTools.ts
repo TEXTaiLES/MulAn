@@ -12,10 +12,27 @@ export const ANNOTATION_TOOLS = [
   { id: 'rectangle_subtract', label: 'Rectangle Subtract', shortcut: 'Shift+R', icon: Square },
 ] as const satisfies ReadonlyArray<{ id: AnnotationTool; label: string; shortcut: string; icon: typeof Brush }>
 
-export function annotationToolForKey(event: KeyboardEvent): AnnotationTool | null {
-  if (event.ctrlKey || event.altKey || event.metaKey) return null
+export type AnnotationHistoryAction = 'undo' | 'redo'
+
+export const ANNOTATION_HISTORY_ACTIONS = [
+  { id: 'undo', label: 'Undo', shortcut: 'Ctrl/Cmd+Z', ariaShortcut: 'Control+Z Meta+Z' },
+  { id: 'redo', label: 'Redo', shortcut: 'Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y', ariaShortcut: 'Control+Shift+Z Meta+Shift+Z Control+Y Meta+Y' },
+] as const satisfies ReadonlyArray<{ id: AnnotationHistoryAction; label: string; shortcut: string; ariaShortcut: string }>
+
+function isEditableTarget(event: KeyboardEvent) {
   const target = event.target instanceof HTMLElement ? event.target : null
-  if (target?.isContentEditable || target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return null
+  return Boolean(target?.isContentEditable || target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'))
+}
+
+export function annotationToolForKey(event: KeyboardEvent): AnnotationTool | null {
+  if (event.ctrlKey || event.altKey || event.metaKey || isEditableTarget(event)) return null
   const pressed = `${event.shiftKey ? 'Shift+' : ''}${event.key.toUpperCase()}`
   return ANNOTATION_TOOLS.find(item => item.shortcut === pressed)?.id ?? null
+}
+
+export function annotationHistoryActionForKey(event: KeyboardEvent): AnnotationHistoryAction | null {
+  if (event.altKey || event.ctrlKey === event.metaKey || isEditableTarget(event)) return null
+  const key = event.key.toUpperCase()
+  if (key === 'Z') return event.shiftKey ? 'redo' : 'undo'
+  return key === 'Y' && !event.shiftKey ? 'redo' : null
 }
