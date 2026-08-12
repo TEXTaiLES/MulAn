@@ -8,9 +8,9 @@ Errors have one shape:
 {"error":{"code":"dimension_mismatch","message":"All BMP images must have identical dimensions.","details":{}}}
 ```
 
-## Convert ordered BMP bands
+## Convert ordered BMP channels
 
-The repeated `files` order becomes TIFF band order. Direct mode returns the TIFF itself.
+The repeated `files` order defines TIFF band-group order. A grayscale BMP contributes one band. An RGB BMP contributes three adjacent bands in deterministic `R`, `G`, `B` order, with default descriptions such as `scene:R`, `scene:G`, and `scene:B`. Mixed grayscale and RGB files are supported; all inputs must have matching spatial dimensions and compatible integer datatypes. Pixel values are copied without RGB-to-grayscale conversion. Direct mode returns the TIFF itself.
 
 ```bash
 curl -X POST \
@@ -23,7 +23,9 @@ curl -X POST \
   --output multispectral.tif
 ```
 
-Use `response_mode=resource` to receive JSON containing `image_id` and `download_url`. Optional `output_name` controls the safe download name. An advanced `manifest` may contain exactly one `{file_index,name}` entry per file.
+`channel_names` contains one string or `null` per final expanded TIFF band, not per uploaded file. For example, grayscale + RGB + grayscale requires five entries.
+
+Use `response_mode=resource` to receive JSON containing `image_id`, the expanded `channel_count`, and `download_url`. Optional `output_name` controls the safe download name. An advanced `manifest` may contain exactly one `{file_index,name}` entry per file; a name assigned to an RGB file expands with `:R`, `:G`, and `:B` suffixes.
 
 ## Image resources
 
@@ -91,4 +93,3 @@ Class endpoints are `POST /annotations/{id}/classes`, `PATCH /annotations/{id}/c
 - `PATCH /api/internal/v1/annotations/{id}/class-order`
 
 Operation bodies contain `base_revision`, `tool`, `class_id`, source-pixel `points`, and `radius` for brushes. Supported tools are `brush_add`, `erase`, `lasso_add`, `lasso_subtract`, `rectangle_add`, and `rectangle_subtract`. A stale `base_revision` returns `409`.
-

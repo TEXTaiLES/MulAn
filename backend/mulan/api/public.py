@@ -9,7 +9,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..errors import ApiError
 from ..services.annotations import AnnotationService
-from ..services.conversion import convert_bmps, parse_channel_names, parse_manifest
+from ..services.conversion import convert_bmps, parse_channel_names, parse_manifest, prepare_bmps
 from ..services.images import ImageService
 
 
@@ -75,8 +75,10 @@ def bmp_to_tiff():
     files = request.files.getlist("files")
     if not files or not any(item.filename for item in files):
         raise ApiError("missing_files", "At least one BMP file is required.", 400)
-    names = parse_channel_names(request.form.get("channel_names"), len(files))
-    manifest_names = parse_manifest(request.form.get("manifest"), files)
+    inputs = prepare_bmps(files)
+    output_count = sum(input_bmp.count for input_bmp in inputs)
+    names = parse_channel_names(request.form.get("channel_names"), output_count)
+    manifest_names = parse_manifest(request.form.get("manifest"), files, [input_bmp.count for input_bmp in inputs])
     if manifest_names is not None:
         if request.form.get("channel_names") not in (None, "") and names != manifest_names:
             raise ApiError("manifest_conflict", "channel_names and manifest describe different names.", 422)
@@ -89,7 +91,7 @@ def bmp_to_tiff():
         output_name = f"{Path(output_name).stem or 'multispectral'}.tif"
     with tempfile.TemporaryDirectory(prefix="mulan-convert-") as temporary:
         output_path = Path(temporary) / "output.tif"
-        result = convert_bmps(files, output_path, names)
+        result = convert_bmps(inputs, output_path, names)
         if response_mode == "direct":
             data = io.BytesIO(output_path.read_bytes())
             response = send_file(data, mimetype="image/tiff", as_attachment=True, download_name=output_name)

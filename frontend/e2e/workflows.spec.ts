@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 
 function grayscaleBmp(width: number, height: number, value: number): Buffer {
-  const rowSize = Math.ceil(width * 3 / 4) * 4; const pixelBytes = rowSize * height; const output = Buffer.alloc(54 + pixelBytes)
-  output.write('BM'); output.writeUInt32LE(output.length, 2); output.writeUInt32LE(54, 10); output.writeUInt32LE(40, 14); output.writeInt32LE(width, 18); output.writeInt32LE(height, 22); output.writeUInt16LE(1, 26); output.writeUInt16LE(24, 28); output.writeUInt32LE(pixelBytes, 34)
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { const offset = 54 + y * rowSize + x * 3; const sample = (value + x + y) % 256; output[offset] = sample; output[offset + 1] = sample; output[offset + 2] = sample }
+  const rowSize = Math.ceil(width / 4) * 4; const pixelBytes = rowSize * height; const pixelOffset = 54 + 256 * 4; const output = Buffer.alloc(pixelOffset + pixelBytes)
+  output.write('BM'); output.writeUInt32LE(output.length, 2); output.writeUInt32LE(pixelOffset, 10); output.writeUInt32LE(40, 14); output.writeInt32LE(width, 18); output.writeInt32LE(height, 22); output.writeUInt16LE(1, 26); output.writeUInt16LE(8, 28); output.writeUInt32LE(pixelBytes, 34); output.writeUInt32LE(256, 46)
+  for (let index = 0; index < 256; index++) { const offset = 54 + index * 4; output[offset] = index; output[offset + 1] = index; output[offset + 2] = index }
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) output[pixelOffset + y * rowSize + x] = (value + x + y) % 256
   return output
 }
 
@@ -18,7 +19,7 @@ async function makeTiff(): Promise<Buffer> {
 
 test('Workflow A: BMP reorder, conversion, result, and TIFF download', async ({ page }) => {
   await page.goto('/convert')
-  await page.getByLabel('Drop grayscale BMP bands here').setInputFiles([
+  await page.getByLabel('Drop grayscale or RGB BMP files here').setInputFiles([
     { name: '450.bmp', mimeType: 'image/bmp', buffer: grayscaleBmp(32, 24, 20) },
     { name: '850.bmp', mimeType: 'image/bmp', buffer: grayscaleBmp(32, 24, 140) },
   ])

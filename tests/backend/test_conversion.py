@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 import numpy as np
 import rasterio
@@ -23,10 +24,12 @@ def test_bmp_order_and_descriptions(client):
 
 
 def test_resource_conversion(client):
-    response = client.post("/api/v1/convert/bmp-to-tiff", data={"files": [bmp(np.ones((4, 4), np.uint8))], "response_mode": "resource", "output_name": "safe.tif"}, content_type="multipart/form-data")
+    rgb = np.stack([np.full((4, 4), 11, np.uint8), np.full((4, 4), 22, np.uint8), np.full((4, 4), 33, np.uint8)], axis=2)
+    response = client.post("/api/v1/convert/bmp-to-tiff", data={"files": [bmp(rgb, "RGB", "color.bmp")], "response_mode": "resource", "output_name": "safe.tif"}, content_type="multipart/form-data")
     assert response.status_code == 201
     result = response.get_json()
-    assert result["channel_count"] == 1
+    assert result["channel_count"] == 3
+    assert result["channel_names"] == ["color:R", "color:G", "color:B"]
     assert client.get(result["download_url"]).status_code == 200
 
 
@@ -42,14 +45,60 @@ def test_conversion_rejections(client):
     assert bad_names.status_code == 422
 
 
-def test_true_rgb_bmp_rejected_and_identical_rgb_accepted(client):
-    color = np.zeros((4, 4, 3), np.uint8); color[..., 0] = 10; color[..., 1] = 20
-    rejected = client.post("/api/v1/convert/bmp-to-tiff", data={"files": bmp(color, "RGB")}, content_type="multipart/form-data")
-    assert rejected.status_code == 422
-    assert rejected.get_json()["error"]["code"] == "color_bmp_not_supported"
-    gray = np.repeat(np.arange(16, dtype=np.uint8).reshape(4, 4)[..., None], 3, axis=2)
-    accepted = client.post("/api/v1/convert/bmp-to-tiff", data={"files": bmp(gray, "RGB")}, content_type="multipart/form-data")
-    assert accepted.status_code == 200
+def test_single_rgb_expands_to_rgb_bands(client):
+    color = np.stack([
+        np.arange(20, dtype=np.uint8).reshape(4, 5),
+        np.full((4, 5), 101, np.uint8),
+        np.flipud(np.arange(20, dtype=np.uint8).reshape(4, 5)),
+    ], axis=2)
+    response = client.post("/api/v1/convert/bmp-to-tiff", data={"files": bmp(color, "RGB", "scene.bmp")}, content_type="multipart/form-data")
+    assert response.status_code == 200
+    assert response.headers["X-Channel-Count"] == "3"
+    with MemoryFile(response.data) as memory, memory.open() as dataset:
+        assert dataset.count == 3
+        np.testing.assert_array_equal(dataset.read(), np.moveaxis(color, 2, 0))
+        assert dataset.descriptions == ("scene:R", "scene:G", "scene:B")
+
+
+def test_grayscale_rgb_grayscale_expands_in_file_and_component_order(client):
+    gray_first = np.full((3, 4), 7, np.uint8)
+    color = np.stack([np.full((3, 4), value, np.uint8) for value in (31, 47, 89)], axis=2)
+    gray_last = np.full((3, 4), 211, np.uint8)
+    names = ["gray1", "red", "green", "blue", "gray2"]
+    response = client.post("/api/v1/convert/bmp-to-tiff", data={
+        "files": [bmp(gray_first, name="gray1.bmp"), bmp(color, "RGB", "rgb.bmp"), bmp(gray_last, name="gray2.bmp")],
+        "channel_names": json.dumps(names),
+    }, content_type="multipart/form-data")
+    assert response.status_code == 200
+    with MemoryFile(response.data) as memory, memory.open() as dataset:
+        expected = np.stack([gray_first, color[..., 0], color[..., 1], color[..., 2], gray_last])
+        assert dataset.count == 5
+        np.testing.assert_array_equal(dataset.read(), expected)
+        assert dataset.descriptions == tuple(names)
+
+
+def test_multiple_rgb_files_remain_grouped(client):
+    first = np.stack([np.full((2, 3), value, np.uint8) for value in (1, 2, 3)], axis=2)
+    second = np.stack([np.full((2, 3), value, np.uint8) for value in (4, 5, 6)], axis=2)
+    response = client.post("/api/v1/convert/bmp-to-tiff", data={"files": [bmp(first, "RGB", "first.bmp"), bmp(second, "RGB", "second.bmp")]}, content_type="multipart/form-data")
+    assert response.status_code == 200
+    with MemoryFile(response.data) as memory, memory.open() as dataset:
+        np.testing.assert_array_equal(dataset.read(), np.moveaxis(np.concatenate([first, second], axis=2), 2, 0))
+        assert dataset.descriptions == ("first:R", "first:G", "first:B", "second:R", "second:G", "second:B")
+
+
+def test_rgb_dimension_mismatch_and_expanded_channel_name_count(client):
+    color = np.zeros((3, 5, 3), np.uint8)
+    mismatch = client.post("/api/v1/convert/bmp-to-tiff", data={"files": [bmp(np.zeros((4, 5), np.uint8), name="gray.bmp"), bmp(color, "RGB", "color.bmp")]}, content_type="multipart/form-data")
+    assert mismatch.status_code == 422
+    assert mismatch.get_json()["error"] == {
+        "code": "dimension_mismatch",
+        "message": "All BMP images must have identical dimensions.",
+        "details": {"file": "color.bmp", "expected": [5, 4], "received": [5, 3]},
+    }
+    bad_names = client.post("/api/v1/convert/bmp-to-tiff", data={"files": bmp(color, "RGB", "color.bmp"), "channel_names": '["color"]'}, content_type="multipart/form-data")
+    assert bad_names.status_code == 422
+    assert bad_names.get_json()["error"]["details"]["expected"] == 3
 
 
 def test_color_palette_bmp_rejected(client):

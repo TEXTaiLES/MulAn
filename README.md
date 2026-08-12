@@ -1,6 +1,6 @@
 # MulAn
 
-MulAn is a single-user web application for converting ordered grayscale BMP bands into multiband TIFFs, inspecting multispectral TIFF channels, and creating ML-ready semantic-segmentation masks. The canonical mask is one integer TIFF band in source-image coordinates; changing the displayed spectral channel never changes annotations.
+MulAn is a single-user web application for converting ordered grayscale and RGB BMP channels into multiband TIFFs, inspecting multispectral TIFF channels, and creating ML-ready semantic-segmentation masks. The canonical mask is one integer TIFF band in source-image coordinates; changing the displayed spectral channel never changes annotations.
 
 ## Run with Docker
 
@@ -82,7 +82,7 @@ Image sources are stored unchanged. Previews are disposable normalized PNGs. Ann
 
 ## Usage
 
-1. **Convert:** add grayscale BMP files, arrange their channel order, optionally name bands, convert, and download the TIFF.
+1. **Convert:** add grayscale and/or RGB BMP files, arrange the file groups, optionally name the expanded bands, convert, and download the TIFF. Grayscale contributes one band; RGB contributes grouped `R`, `G`, `B` bands without changing pixel values.
 2. **Viewer:** upload a TIFF, move between single channels or a thumbnail grid, zoom/pan, and open the same `image_id` in Annotator.
 3. **Annotator:** create stable-ID classes; brush, erase, lasso, or rectangle in source coordinates; change spectral channels without changing the mask; undo/redo; optionally replace the mask after confirmation; save and export the mask package with or without the original image.
 
