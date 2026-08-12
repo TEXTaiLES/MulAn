@@ -6,6 +6,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiFailure } from '../api/client'
 import { UploadDropzone } from '../components/UploadDropzone'
+import { inferWavelengthName } from '../utils/wavelength'
 
 type Band = { id: string; file: File; channelCount: 1 | 3; names: string[] }
 
@@ -51,7 +52,8 @@ export function ConvertPage() {
     if (invalid) { setError(`${invalid.name} is not a BMP file.`); return }
     const additions = await Promise.all(files.map(async file => {
       const channelCount = await bmpChannelCount(file)
-      return { id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`, file, channelCount, names: Array<string>(channelCount).fill('') }
+      const names = channelCount === 1 ? [inferWavelengthName(file.name) || ''] : Array<string>(channelCount).fill('')
+      return { id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`, file, channelCount, names }
     }))
     setError(''); setBandErrors({}); setBands(current => [...current, ...additions])
   }
@@ -74,7 +76,7 @@ export function ConvertPage() {
   let outputStart = 0
   return <div className="page tool-page"><div className="page-heading compact"><span className="eyebrow">Converter</span><h1>Set channel group order</h1><p>Drag rows or use the arrow buttons. RGB channels remain grouped in R, G, B order.</p><p className="conversion-summary" role="status" aria-label="Output channel count"><strong>{outputCount}</strong> output {outputCount === 1 ? 'channel' : 'channels'} from {bands.length} {bands.length === 1 ? 'file' : 'files'}</p></div>
     {error && <p className="error" role="alert">{error}</p>}
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dragEnd}><SortableContext items={ids} strategy={verticalListSortingStrategy}><div className="band-list">{bands.map((band, index) => { const start = outputStart; outputStart += band.channelCount; return <SortableBand key={band.id} band={band} index={index} count={bands.length} outputStart={start} error={bandErrors[band.id]} onMove={move} onDelete={() => setBands(items => items.filter(item => item.id !== band.id))} onName={(nameIndex, name) => setBands(items => items.map(item => item.id === band.id ? { ...item, names: item.names.map((value, itemIndex) => itemIndex === nameIndex ? name : value) } : item))} /> })}</div></SortableContext></DndContext>
-    <div className="action-row"><button className="secondary" onClick={() => addInput.current?.click()}><Plus />Add more bands</button><input ref={addInput} className="visually-hidden" type="file" accept=".bmp,image/bmp" multiple onChange={event => add(Array.from(event.target.files || []))} /><button className="primary large" disabled={busy || !bands.length} onClick={convert}>{busy ? 'Converting…' : 'Convert to TIF'}</button></div>
+    <div className="band-order-layout"><DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dragEnd}><SortableContext items={ids} strategy={verticalListSortingStrategy}><div className="band-list">{bands.map((band, index) => { const start = outputStart; outputStart += band.channelCount; return <SortableBand key={band.id} band={band} index={index} count={bands.length} outputStart={start} error={bandErrors[band.id]} onMove={move} onDelete={() => setBands(items => items.filter(item => item.id !== band.id))} onName={(nameIndex, name) => setBands(items => items.map(item => item.id === band.id ? { ...item, names: item.names.map((value, itemIndex) => itemIndex === nameIndex ? name : value) } : item))} /> })}</div></SortableContext></DndContext><aside className="wavelength-guide" aria-label="Wavelength order: lower to higher"><span>Lower<small>wavelength / nm</small></span><ArrowDown aria-hidden="true" /><span>Higher<small>wavelength / nm</small></span></aside></div>
+    <div className="action-row"><button className="secondary" onClick={() => addInput.current?.click()}><Plus />Add more bands</button><input ref={addInput} className="visually-hidden" aria-label="Add more BMP files" type="file" accept=".bmp,image/bmp" multiple onChange={event => add(Array.from(event.target.files || []))} /><button className="primary large" disabled={busy || !bands.length} onClick={convert}>{busy ? 'Converting…' : 'Convert to TIF'}</button></div>
   </div>
 }
