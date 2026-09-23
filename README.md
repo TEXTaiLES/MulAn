@@ -10,12 +10,13 @@ Requirements: Docker Engine with Docker Compose.
 docker compose up --build
 ```
 
-Open <http://localhost:5000>. The one application service builds the React UI, serves it from Flask/Gunicorn, and stores temporary resources in the `mulan-data` volume. Stop with `docker compose down`; add `-v` only when you intentionally want to remove stored temporary resources.
+Open <http://localhost:5000> (or the port set by `MULAN_PORT`). The one application service builds the React UI, serves it from Flask/Gunicorn, and stores temporary resources in the `mulan-data` volume. Stop with `docker compose down`; add `-v` only when you intentionally want to remove stored temporary resources.
 
 Optional settings can be placed in `.env` (see `.env.example`):
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
+| `MULAN_PORT` | `5000` | Port the application listens on, in Docker and in local development (Flask dev server, Vite proxy, Playwright) |
 | `MULAN_DATA_DIR` | `./data` locally, `/data` in Docker | Image, annotation, preview, and history storage |
 | `MULAN_RESOURCE_TTL_HOURS` | `24` | Age after which resources are eligible for startup/manual cleanup |
 | `MULAN_MAX_UPLOAD_MB` | `512` | Maximum request size |
@@ -30,7 +31,7 @@ Backend (macOS/Linux):
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[test]'
-python -m flask --app mulan.wsgi run --debug --port 5000
+python -m mulan
 ```
 
 Backend (PowerShell):
@@ -39,7 +40,7 @@ Backend (PowerShell):
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[test]"
-python -m flask --app mulan.wsgi run --debug --port 5000
+python -m mulan
 ```
 
 The editable install maps the `mulan` package from `backend/`. In a second terminal, run the frontend:
@@ -50,7 +51,7 @@ npm ci
 npm run dev
 ```
 
-Open <http://localhost:5173>. Vite proxies `/api` requests to Flask on port 5000.
+Open <http://localhost:5173>. Vite proxies `/api` requests to Flask on `MULAN_PORT`.
 
 ## Tests and production build
 
@@ -68,7 +69,7 @@ npx playwright install chromium
 npm run e2e
 ```
 
-Playwright starts the Flask and Vite development servers. If your platform uses a versioned Python command, start Flask manually on port 5000 first; Playwright reuses a running server.
+Playwright starts the Flask and Vite development servers. If your platform uses a versioned Python command, start Flask manually with `python -m mulan` first; Playwright reuses a running server.
 
 ## How it is organized
 

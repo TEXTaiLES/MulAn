@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { backendUrl } from '../mulan.env.ts'
 
 function grayscaleBmp(width: number, height: number, value: number): Buffer {
   const rowSize = Math.ceil(width / 4) * 4; const pixelBytes = rowSize * height; const pixelOffset = 54 + 256 * 4; const output = Buffer.alloc(pixelOffset + pixelBytes)
@@ -13,7 +14,7 @@ async function makeTiff(): Promise<Buffer> {
   form.append('files', new Blob([grayscaleBmp(32, 24, 20)], { type: 'image/bmp' }), '450.bmp')
   form.append('files', new Blob([grayscaleBmp(32, 24, 140)], { type: 'image/bmp' }), '850.bmp')
   form.append('channel_names', '["450nm","850nm"]'); form.append('response_mode', 'direct'); form.append('output_name', 'sample.tif')
-  const response = await fetch('http://127.0.0.1:5000/api/v1/convert/bmp-to-tiff', { method: 'POST', body: form })
+  const response = await fetch(`${backendUrl}/api/v1/convert/bmp-to-tiff`, { method: 'POST', body: form })
   expect(response.ok).toBeTruthy(); return Buffer.from(await response.arrayBuffer())
 }
 

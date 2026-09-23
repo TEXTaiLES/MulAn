@@ -2,6 +2,12 @@
 
 Public endpoints live under `/api/v1`. UI editing endpoints live under `/api/internal/v1`. API state is identified only by UUID resource IDs and does not depend on cookies.
 
+The examples use `MULAN_URL` for the server address; set it to match `MULAN_PORT` in `.env`:
+
+```bash
+export MULAN_URL=http://localhost:5000
+```
+
 Errors have one shape:
 
 ```json
@@ -19,7 +25,7 @@ curl -X POST \
   -F "files=@850.bmp" \
   -F 'channel_names=["450nm","550nm","850nm"]' \
   -F "response_mode=direct" \
-  http://localhost:5000/api/v1/convert/bmp-to-tiff \
+  $MULAN_URL/api/v1/convert/bmp-to-tiff \
   --output multispectral.tif
 ```
 
@@ -32,15 +38,15 @@ Use `response_mode=resource` to receive JSON containing `image_id`, the expanded
 ```bash
 # Upload and receive an image_id
 curl -X POST -F "file=@multispectral.tif" \
-  http://localhost:5000/api/v1/images
+  $MULAN_URL/api/v1/images
 
 # Metadata, unchanged original, and zero-based channel preview
-curl http://localhost:5000/api/v1/images/IMAGE_ID
-curl -o original.tif http://localhost:5000/api/v1/images/IMAGE_ID/file
+curl $MULAN_URL/api/v1/images/IMAGE_ID
+curl -o original.tif $MULAN_URL/api/v1/images/IMAGE_ID/file
 curl -o channel.png \
-  "http://localhost:5000/api/v1/images/IMAGE_ID/channels/0/preview?max_size=800&normalization=percentile"
+  "$MULAN_URL/api/v1/images/IMAGE_ID/channels/0/preview?max_size=800&normalization=percentile"
 
-curl -X DELETE http://localhost:5000/api/v1/images/IMAGE_ID
+curl -X DELETE $MULAN_URL/api/v1/images/IMAGE_ID
 ```
 
 An image referenced by an active annotation cannot be deleted.
@@ -51,34 +57,34 @@ Create from an existing image resource:
 
 ```bash
 curl -X POST -F "image_id=IMAGE_ID" \
-  http://localhost:5000/api/v1/annotations
+  $MULAN_URL/api/v1/annotations
 ```
 
 Or upload the source TIFF directly:
 
 ```bash
 curl -X POST -F "image=@multispectral.tif" \
-  http://localhost:5000/api/v1/annotations
+  $MULAN_URL/api/v1/annotations
 ```
 
 Both forms optionally accept `mask=@mask.tif` and `metadata=@annotations.json`. Exactly one of `image` and `image_id` is required.
 
 ```bash
 # Retrieve state and canonical one-band mask
-curl http://localhost:5000/api/v1/annotations/ANNOTATION_ID
+curl $MULAN_URL/api/v1/annotations/ANNOTATION_ID
 curl -o mask.tif \
-  http://localhost:5000/api/v1/annotations/ANNOTATION_ID/mask
+  $MULAN_URL/api/v1/annotations/ANNOTATION_ID/mask
 
 # Replace a mask (explicit overwrite is required when pixels are already labeled)
 curl -X PUT -F "mask=@mask.tif" -F "metadata=@annotations.json" \
   -F "overwrite=true" \
-  http://localhost:5000/api/v1/annotations/ANNOTATION_ID/mask
+  $MULAN_URL/api/v1/annotations/ANNOTATION_ID/mask
 
 # Mask + JSON package, or package including the byte-preserved source
 curl -o annotation-mask.zip \
-  "http://localhost:5000/api/v1/annotations/ANNOTATION_ID/export?include_image=false"
+  "$MULAN_URL/api/v1/annotations/ANNOTATION_ID/export?include_image=false"
 curl -o annotation.zip \
-  "http://localhost:5000/api/v1/annotations/ANNOTATION_ID/export?include_image=true"
+  "$MULAN_URL/api/v1/annotations/ANNOTATION_ID/export?include_image=true"
 ```
 
 Mask replacement is recorded in the same bounded history used by annotation operations. The internal undo and redo endpoints restore both mask pixels and imported class metadata.

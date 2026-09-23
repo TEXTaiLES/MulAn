@@ -22,6 +22,6 @@ RUN pip install --no-cache-dir .
 RUN mkdir -p /data && chown -R 10001:10001 /app /data
 USER 10001
 WORKDIR /app/backend
-EXPOSE 5000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)"]
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--access-logfile", "-", "mulan.wsgi:app"]
+EXPOSE ${MULAN_PORT}
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ['MULAN_PORT']}/api/health\", timeout=3)"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${MULAN_PORT} --workers 2 --threads 4 --access-logfile - mulan.wsgi:app"]
