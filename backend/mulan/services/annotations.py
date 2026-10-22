@@ -218,7 +218,7 @@ class AnnotationService:
 
     def get(self, annotation_id: str, statistics: bool = True) -> dict:
         metadata = self.store.read_json("annotations", annotation_id)
-        result = {key: value for key, value in metadata.items() if key not in {"next_class_id", "_owns_image"}}
+        result = {key: value for key, value in metadata.items() if key != "next_class_id" and not key.startswith("_")}
         if statistics:
             mask = self._load_mask(annotation_id)
             values, counts = np.unique(mask, return_counts=True)
@@ -255,6 +255,9 @@ class AnnotationService:
         allowed = {"name", "description", "color", "order"}
         if not isinstance(payload, dict) or set(payload) - allowed:
             raise ApiError("invalid_class", "Only name, description, color, and order can be edited.", 422)
+        if class_id == 0 and payload.get("name", current["name"]).strip() != current["name"]:
+            # HESTIA only accepts annotation packages whose class 0 is "Background".
+            raise ApiError("background_rename_forbidden", "Background class 0 cannot be renamed.", 409)
         updated = _normalize_class({**current, **payload}, order=current.get("order", 0))
         updated["id"] = class_id
         metadata["classes"][metadata["classes"].index(current)] = updated
@@ -453,14 +456,21 @@ class AnnotationService:
     def redo(self, annotation_id: str) -> dict:
         return self._history_action(annotation_id, "redo")
 
-    def save(self, annotation_id: str) -> dict:
+    def check_saveable(self, annotation_id: str) -> int:
+        """The current revision, once the mask only uses defined classes."""
         metadata = self.store.read_json("annotations", annotation_id)
         mask = self._load_mask(annotation_id)
         known = {item["id"] for item in metadata["classes"]}
         actual = {int(value) for value in np.unique(mask)}
         if not actual.issubset(known):
             raise ApiError("unknown_mask_class", "The mask contains class IDs missing from annotation metadata.", 422, {"class_ids": sorted(actual - known)})
-        metadata["saved_revision"] = metadata["revision"]
+        return metadata["revision"]
+
+    def save(self, annotation_id: str, revision: int | None = None) -> dict:
+        """Marks ``revision`` (default: the current one) as saved."""
+        current = self.check_saveable(annotation_id)
+        metadata = self.store.read_json("annotations", annotation_id)
+        metadata["saved_revision"] = current if revision is None else revision
         self._save_metadata(annotation_id, metadata)
         return {"revision": metadata["revision"], "saved_revision": metadata["saved_revision"]}
 

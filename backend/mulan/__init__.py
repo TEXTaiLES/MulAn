@@ -8,7 +8,9 @@ from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 from .api.internal import internal_api
 from .api.public import public_api
+from .auth import SESSION_CACHE_SECONDS, SessionCache, auth_api
 from .errors import ApiError
+from .hestia import HestiaClient
 from .storage.filesystem import FileStore
 
 
@@ -23,6 +25,14 @@ def create_app(test_config: dict | None = None) -> Flask:
         MULAN_RESOURCE_TTL_HOURS=float(os.environ.get("MULAN_RESOURCE_TTL_HOURS", "24")),
         MAX_CONTENT_LENGTH=int(os.environ.get("MULAN_MAX_UPLOAD_MB", "512")) * 1024 * 1024,
         JSON_SORT_KEYS=False,
+        # Server-to-server address of the HESTIA API.
+        HESTIA_API_URL=os.environ.get("HESTIA_API_URL", "http://localhost:5000"),
+        # Browser-facing HESTIA portal, where users sign in and out.
+        HESTIA_PORTAL_URL=os.environ.get("HESTIA_PORTAL_URL", "http://localhost:8055"),
+        HESTIA_COOKIE_NAME=os.environ.get("HESTIA_COOKIE_NAME", "textailes_refresh_token"),
+        HESTIA_TIMEOUT_SECONDS=float(os.environ.get("HESTIA_TIMEOUT_SECONDS", "30")),
+        # Public URL of this MulAn deployment; derived from the request when empty.
+        MULAN_PUBLIC_URL=os.environ.get("MULAN_PUBLIC_URL", ""),
     )
     if test_config:
         app.config.update(test_config)
@@ -31,7 +41,10 @@ def create_app(test_config: dict | None = None) -> Flask:
     store.initialize()
     store.cleanup_expired(float(app.config["MULAN_RESOURCE_TTL_HOURS"]))
     app.extensions["mulan_store"] = store
+    app.extensions["hestia"] = HestiaClient(app.config["HESTIA_API_URL"], app.config["HESTIA_COOKIE_NAME"], app.config["HESTIA_TIMEOUT_SECONDS"])
+    app.extensions["hestia_sessions"] = SessionCache(SESSION_CACHE_SECONDS)
 
+    app.register_blueprint(auth_api)
     app.register_blueprint(public_api, url_prefix="/api/v1")
     app.register_blueprint(internal_api, url_prefix="/api/internal/v1")
 

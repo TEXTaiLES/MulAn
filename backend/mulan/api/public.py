@@ -5,20 +5,46 @@ import json
 import tempfile
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, request, send_file, stream_with_context
 
+from ..auth import hestia, require_login, require_session, require_token
 from ..errors import ApiError
 from ..services.annotations import AnnotationService
 from ..services.conversion import convert_bmps, parse_channel_names, parse_manifest, prepare_bmps
+from ..services.hestia_annotations import HestiaAnnotationService
+from ..services.hestia_images import HestiaImageCache
 from ..services.images import ImageService
 
 
 public_api = Blueprint("public_api", __name__)
+# MulAn is a HESTIA tool: every API call needs a signed-in HESTIA user.
+public_api.before_request(require_login)
+
+IMAGE_LIST_PARAMS = ("page", "per_page", "q", "sort", "has_annotation")
+FORWARDED_FILE_HEADERS = ("Content-Type", "Content-Length", "Content-Disposition", "ETag", "Cache-Control")
 
 
 def _services() -> tuple[ImageService, AnnotationService]:
     store = current_app.extensions["mulan_store"]
     return ImageService(store), AnnotationService(store)
+
+
+def _image_cache() -> HestiaImageCache:
+    return HestiaImageCache(current_app.extensions["mulan_store"], hestia())
+
+
+def _hestia_annotations() -> HestiaAnnotationService:
+    return HestiaAnnotationService(current_app.extensions["mulan_store"], hestia())
+
+
+def _user_id() -> str:
+    return require_session()["user"]["id"]
+
+
+def _owned(annotation_id: str) -> AnnotationService:
+    """The annotation service, once the caller is known to own the working copy."""
+    _hestia_annotations().authorize(_user_id(), annotation_id)
+    return _services()[1]
 
 
 def _bool_field(value: str | None, default: bool = False) -> bool:
@@ -32,24 +58,37 @@ def _bool_field(value: str | None, default: bool = False) -> bool:
     raise ApiError("invalid_boolean", "Boolean fields must be true or false.", 400)
 
 
+@public_api.get("/images")
+def list_images():
+    params = {key: request.args[key] for key in IMAGE_LIST_PARAMS if key in request.args}
+    return jsonify(hestia().list_images(require_token(), params))
+
+
 @public_api.post("/images")
 def upload_image():
-    images, _ = _services()
-    metadata = images.create_from_upload(request.files.get("file"))
-    return jsonify(metadata), 201
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        raise ApiError("missing_file", "A TIFF file is required.", 400)
+    return jsonify(hestia().upload_image(require_token(), upload.stream, upload.filename)), 201
 
 
 @public_api.get("/images/<image_id>")
 def image_metadata(image_id: str):
-    images, _ = _services()
-    return jsonify(images.get(image_id))
+    return jsonify(hestia().image(require_token(), image_id))
 
 
 @public_api.get("/images/<image_id>/file")
 def image_file(image_id: str):
-    images, _ = _services()
-    metadata = images.get(image_id)
-    return send_file(images.path(image_id), mimetype="image/tiff", as_attachment=True, download_name=metadata["filename"], conditional=True)
+    upstream = hestia().open_image_file(require_token(), image_id)
+    headers = {name: upstream.headers[name] for name in FORWARDED_FILE_HEADERS if name in upstream.headers}
+
+    def body():
+        try:
+            yield from upstream.iter_content(1024 * 1024)
+        finally:
+            upstream.close()
+
+    return Response(stream_with_context(body()), headers=headers)
 
 
 @public_api.get("/images/<image_id>/channels/<int:channel_index>/preview")
@@ -59,15 +98,20 @@ def channel_preview(image_id: str, channel_index: int):
         max_size = int(request.args.get("max_size", "1600"))
     except ValueError as exc:
         raise ApiError("invalid_max_size", "max_size must be an integer.", 400) from exc
+    image_id = _image_cache().ensure(require_token(), image_id)["image_id"]
     path = images.preview(image_id, channel_index, max_size, request.args.get("normalization", "percentile"))
-    return send_file(path, mimetype="image/png", conditional=True, max_age=3600)
+    response = send_file(path, mimetype="image/png", conditional=True, max_age=3600)
+    response.cache_control.public = False
+    response.cache_control.private = True
+    return response
 
 
-@public_api.delete("/images/<image_id>")
-def delete_image(image_id: str):
-    images, _ = _services()
-    images.delete(image_id)
-    return "", 204
+@public_api.get("/images/<image_id>/annotation/package")
+def annotation_package(image_id: str):
+    """The image's saved annotation from HESTIA, optionally bundled with the source TIFF."""
+    include_image = _bool_field(request.args.get("include_image"), False)
+    package = _hestia_annotations().package(require_token(), image_id, include_image)
+    return send_file(package, mimetype="application/zip", as_attachment=True, download_name="annotation.zip" if include_image else "annotation-mask.zip")
 
 
 @public_api.post("/convert/bmp-to-tiff")
@@ -97,8 +141,9 @@ def bmp_to_tiff():
             response = send_file(data, mimetype="image/tiff", as_attachment=True, download_name=output_name)
             response.headers["X-Channel-Count"] = str(result.count)
             return response
-        images, _ = _services()
-        metadata = images.create_from_existing_path(output_path, output_name)
+        # "resource" mode stores the converted TIFF in HESTIA as a new image.
+        with output_path.open("rb") as output:
+            metadata = hestia().upload_image(require_token(), output, output_name)
     payload = {
         "image_id": metadata["image_id"], "filename": metadata["filename"], "width": metadata["width"],
         "height": metadata["height"], "channel_count": metadata["channel_count"], "channel_names": metadata["channel_names"],
@@ -109,72 +154,45 @@ def bmp_to_tiff():
 
 @public_api.post("/annotations")
 def create_annotation():
-    images, annotations = _services()
-    image_upload = request.files.get("image")
+    """Opens a working copy of the image's HESTIA annotation (blank if it has none)."""
     image_id = request.form.get("image_id")
-    if bool(image_upload and image_upload.filename) == bool(image_id):
-        raise ApiError("invalid_image_source", "Provide exactly one of image or image_id.", 400)
-    created_image_id = None
-    if image_upload and image_upload.filename:
-        image_meta = images.create_from_upload(image_upload)
-        image_id = created_image_id = image_meta["image_id"]
-    try:
-        result = annotations.create(image_id, request.files.get("mask"), request.files.get("metadata"), owns_image=created_image_id is not None)
-    except Exception:
-        if created_image_id:
-            images.delete(created_image_id)
-        raise
-    return jsonify(result), 201
+    if not image_id:
+        raise ApiError("invalid_image_source", "image_id is required.", 400)
+    return jsonify(_hestia_annotations().open(require_token(), _user_id(), image_id)), 201
 
 
 @public_api.get("/annotations/<annotation_id>")
 def get_annotation(annotation_id: str):
-    _, annotations = _services()
-    return jsonify(annotations.get(annotation_id))
+    return jsonify(_hestia_annotations().get(_user_id(), annotation_id))
 
 
 @public_api.get("/annotations/<annotation_id>/mask")
 def get_mask(annotation_id: str):
-    _, annotations = _services()
-    return send_file(annotations.export_mask(annotation_id), mimetype="image/tiff", as_attachment=True, download_name="mask.tif", conditional=True)
+    return send_file(_owned(annotation_id).export_mask(annotation_id), mimetype="image/tiff", as_attachment=True, download_name="mask.tif", conditional=True)
 
 
 @public_api.put("/annotations/<annotation_id>/mask")
 def replace_mask(annotation_id: str):
-    _, annotations = _services()
-    result = annotations.replace_mask(annotation_id, request.files.get("mask"), request.files.get("metadata"), _bool_field(request.form.get("overwrite")))
-    return jsonify(result)
+    annotations = _owned(annotation_id)
+    annotations.replace_mask(annotation_id, request.files.get("mask"), request.files.get("metadata"), _bool_field(request.form.get("overwrite")))
+    return jsonify(_hestia_annotations().get(_user_id(), annotation_id))
 
 
 @public_api.post("/annotations/<annotation_id>/classes")
 def add_class(annotation_id: str):
-    _, annotations = _services()
+    annotations = _owned(annotation_id)
     item = annotations.add_class(annotation_id, request.get_json(silent=True) or {})
     return jsonify(item), 201
 
 
 @public_api.patch("/annotations/<annotation_id>/classes/<int:class_id>")
 def update_class(annotation_id: str, class_id: int):
-    _, annotations = _services()
+    annotations = _owned(annotation_id)
     return jsonify(annotations.update_class(annotation_id, class_id, request.get_json(silent=True) or {}))
 
 
 @public_api.delete("/annotations/<annotation_id>/classes/<int:class_id>")
 def delete_class(annotation_id: str, class_id: int):
-    _, annotations = _services()
+    annotations = _owned(annotation_id)
     annotations.delete_class(annotation_id, class_id)
-    return "", 204
-
-
-@public_api.get("/annotations/<annotation_id>/export")
-def export_annotation(annotation_id: str):
-    _, annotations = _services()
-    include_image = _bool_field(request.args.get("include_image"), False)
-    return send_file(annotations.export_zip(annotation_id, include_image), mimetype="application/zip", as_attachment=True, download_name="annotation.zip" if include_image else "annotation-mask.zip")
-
-
-@public_api.delete("/annotations/<annotation_id>")
-def delete_annotation(annotation_id: str):
-    _, annotations = _services()
-    annotations.delete(annotation_id)
     return "", 204

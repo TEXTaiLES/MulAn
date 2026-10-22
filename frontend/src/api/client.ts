@@ -1,4 +1,4 @@
-import type { AnnotationClass, AnnotationResource, ImageResource } from '../types'
+import type { AnnotationClass, AnnotationResource, HestiaSession, ImagePage, ImageResource } from '../types'
 
 export class ApiFailure extends Error {
   code: string
@@ -12,7 +12,11 @@ export class ApiFailure extends Error {
   }
 }
 
+/** Sends the browser to the HESTIA portal; it returns the user to MulAn's front page. */
+export function signIn(loginUrl = '/auth/login') { window.location.assign(loginUrl) }
+
 async function parse<T>(response: Response): Promise<T> {
+  if (response.status === 401) signIn()
   if (!response.ok) {
     let body: { error?: { code?: string; message?: string; details?: Record<string, unknown> } } = {}
     try { body = await response.json() } catch { /* response was not JSON */ }
@@ -23,6 +27,11 @@ async function parse<T>(response: Response): Promise<T> {
 }
 
 export const api = {
+  session: () => fetch('/api/v1/session').then(parse<HestiaSession>),
+  images: ({ page, per_page, q }: { page: number; per_page: number; q?: string }) => {
+    const query = new URLSearchParams({ page: String(page), per_page: String(per_page) }); if (q) query.set('q', q)
+    return fetch(`/api/v1/images?${query}`).then(parse<ImagePage>)
+  },
   image: (id: string) => fetch(`/api/v1/images/${id}`).then(parse<ImageResource>),
   uploadImage: (file: File) => {
     const data = new FormData(); data.append('file', file)

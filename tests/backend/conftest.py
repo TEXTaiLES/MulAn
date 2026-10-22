@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import json
+import zipfile
 
 import numpy as np
 import pytest
@@ -9,17 +11,33 @@ from PIL import Image
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+from fake_hestia import TOKEN, FakeHestia
 from mulan import create_app
 
 
 @pytest.fixture()
-def app(tmp_path):
-    return create_app({"TESTING": True, "MULAN_DATA_DIR": str(tmp_path / "data"), "MAX_CONTENT_LENGTH": 20 * 1024 * 1024})
+def hestia():
+    return FakeHestia()
+
+
+@pytest.fixture()
+def app(tmp_path, hestia):
+    app = create_app({"TESTING": True, "MULAN_DATA_DIR": str(tmp_path / "data"), "MAX_CONTENT_LENGTH": 20 * 1024 * 1024, "HESTIA_PORTAL_URL": "http://portal.test"})
+    app.extensions["hestia"] = hestia
+    return app
+
+
+@pytest.fixture()
+def anonymous_client(app):
+    return app.test_client()
 
 
 @pytest.fixture()
 def client(app):
-    return app.test_client()
+    """A client signed in to HESTIA as user-1."""
+    signed_in = app.test_client()
+    signed_in.set_cookie(app.config["HESTIA_COOKIE_NAME"], TOKEN)
+    return signed_in
 
 
 def bmp(array: np.ndarray, mode: str | None = None, name: str = "band.bmp") -> tuple[io.BytesIO, str]:
@@ -74,3 +92,18 @@ def operation(client, annotation_id, revision, tool, class_id, points, radius=No
         payload["radius"] = radius
     return client.post(f"/api/internal/v1/annotations/{annotation_id}/operations", json=payload)
 
+
+
+def annotation_package(mask: np.ndarray, classes: list[dict]) -> bytes:
+    """A MulAn v1 annotation package, as HESTIA stores and serves it."""
+    metadata = {
+        "format": "mulan-semantic-segmentation", "version": "1.0",
+        "image": {"width": mask.shape[1], "height": mask.shape[0]},
+        "mask": {"filename": "mask.tif", "dtype": str(mask.dtype), "background_id": 0, "ignore_id": None},
+        "classes": classes,
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("mask.tif", tiff(mask, "mask.tif")[0].getvalue())
+        archive.writestr("annotations.json", json.dumps(metadata))
+    return buffer.getvalue()

@@ -1,14 +1,17 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup as cleanupView, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { UnsavedProvider, useUnsaved } from '../context/UnsavedContext'
+import { WithSession } from '../test/session'
+import type { Capability } from '../types'
 import { AnnotatorPage } from './AnnotatorPage'
 
 vi.mock('react-konva', () => ({ Stage: ({ children }: { children: React.ReactNode }) => <div data-testid="stage">{children}</div>, Layer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Image: () => <div />, Line: () => <div />, Rect: () => <div /> }))
 
 const image = { image_id: 'image-1', filename: 'sample.tif', width: 20, height: 10, channel_count: 2, dtype: 'uint16', channel_names: [null, null], georeferenced: false }
-let annotation = { annotation_id: 'ann-1', image_id: 'image-1', filename: 'sample.tif', width: 20, height: 10, channel_count: 2, revision: 0, saved_revision: 0, classes: [{ id: 0, name: 'Background', description: '', color: '#000000', order: 0, visible: true }], can_undo: false, can_redo: false, statistics: [{ class_id: 0, pixel_count: 200 }] }
+let annotation = { annotation_id: 'ann-1', image_id: 'image-1', filename: 'sample.tif', width: 20, height: 10, channel_count: 2, revision: 0, saved_revision: 0, classes: [{ id: 0, name: 'Background', description: '', color: '#000000', order: 0, visible: true }], can_undo: false, can_redo: false, hestia_revision: null as number | null, statistics: [{ class_id: 0, pixel_count: 200 }] }
 
+let saveConflict = false
 function json(value: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })) }
 function installFetch() {
   vi.stubGlobal('fetch', vi.fn((url: string | URL | Request, init?: RequestInit) => {
@@ -20,7 +23,7 @@ function installFetch() {
     if (path.includes('/classes/1') && method === 'PATCH') { const value = { ...annotation.classes[1], ...JSON.parse(String(init?.body)) }; annotation = { ...annotation, revision: annotation.revision + 1, classes: [annotation.classes[0], value] }; return json(value) }
     if (path.includes('/class-order')) { const ids = JSON.parse(String(init?.body)).class_ids as number[]; const classes = ids.map(id => annotation.classes.find(item => item.id === id)!); annotation = { ...annotation, revision: annotation.revision + 1, classes }; return json({ classes }) }
     if (path.includes('/classes/1') && method === 'DELETE') { annotation = { ...annotation, revision: annotation.revision + 1, classes: annotation.classes.filter(item => item.id !== 1) }; return Promise.resolve(new Response(null, { status: 204 })) }
-    if (path.endsWith('/save')) { annotation = { ...annotation, saved_revision: annotation.revision }; return json({ revision: annotation.revision, saved_revision: annotation.revision }) }
+    if (path.endsWith('/save')) { if (saveConflict) return json({ error: { code: 'annotation_revision_conflict', message: 'This annotation was changed in HESTIA after you opened it.', details: {} } }, 409); annotation = { ...annotation, saved_revision: annotation.revision, hestia_revision: (annotation.hestia_revision ?? 0) + 1 }; return json({ revision: annotation.revision, saved_revision: annotation.revision, hestia_revision: annotation.hestia_revision }) }
     if (path.endsWith('/undo')) { annotation = { ...annotation, revision: annotation.revision + 1, can_undo: false, can_redo: true }; return json(annotation) }
     if (path.endsWith('/redo')) { annotation = { ...annotation, revision: annotation.revision + 1, can_undo: true, can_redo: false }; return json(annotation) }
     if (path.endsWith('/mask') && method === 'PUT') {
@@ -32,10 +35,10 @@ function installFetch() {
   }))
 }
 function DirtyProbe() { const { dirty } = useUnsaved(); return <output aria-label="Dirty state">{dirty ? 'dirty' : 'clean'}</output> }
-function view() { return render(<MemoryRouter initialEntries={['/annotator?image_id=image-1']}><UnsavedProvider><DirtyProbe /><Routes><Route path="annotator" element={<AnnotatorPage />} /></Routes></UnsavedProvider></MemoryRouter>) }
+function view(denied: Capability[] = []) { return render(<WithSession denied={denied}><MemoryRouter initialEntries={['/annotator?image_id=image-1']}><UnsavedProvider><DirtyProbe /><Routes><Route path="annotator" element={<AnnotatorPage />} /></Routes></UnsavedProvider></MemoryRouter></WithSession>) }
 
 describe('annotator class and save state', () => {
-  beforeEach(() => { annotation = { annotation_id: 'ann-1', image_id: 'image-1', filename: 'sample.tif', width: 20, height: 10, channel_count: 2, revision: 0, saved_revision: 0, classes: [{ id: 0, name: 'Background', description: '', color: '#000000', order: 0, visible: true }], can_undo: false, can_redo: false, statistics: [{ class_id: 0, pixel_count: 200 }] }; installFetch() })
+  beforeEach(() => { saveConflict = false; annotation = { annotation_id: 'ann-1', image_id: 'image-1', filename: 'sample.tif', width: 20, height: 10, channel_count: 2, revision: 0, saved_revision: 0, classes: [{ id: 0, name: 'Background', description: '', color: '#000000', order: 0, visible: true }], can_undo: false, can_redo: false, hestia_revision: null as number | null, statistics: [{ class_id: 0, pixel_count: 200 }] }; installFetch() })
   afterEach(() => vi.useRealTimers())
   it('creates, edits, reorders, hides, and confirms class deletion without changing IDs', async () => {
     view(); await screen.findByText('Semantic layers'); expect(screen.queryByText('200 px')).not.toBeInTheDocument(); fireEvent.click(screen.getByRole('button', { name: 'Add class' })); const dialog = screen.getByRole('dialog', { name: 'Add class' }); fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Vegetation' } }); fireEvent.click(within(dialog).getByRole('button', { name: 'Add class' }))
@@ -52,7 +55,7 @@ describe('annotator class and save state', () => {
     annotation = { ...annotation, revision: 2, saved_revision: 0 }; view(); await screen.findByText('Semantic layers'); await waitFor(() => expect(screen.getByLabelText('Dirty state')).toHaveTextContent('dirty'))
     const mask = new File(['mask'], 'mask.tif', { type: 'image/tiff' }); const panel = screen.getByText('Semantic layers').closest('aside')!; fireEvent.drop(panel, { dataTransfer: { files: [mask] } })
     await screen.findByRole('dialog', { name: 'Replace current annotations?' }); fireEvent.click(screen.getByRole('button', { name: 'Replace' })); await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); await screen.findByRole('dialog', { name: 'Annotation saved' }); await waitFor(() => expect(screen.getByLabelText('Dirty state')).toHaveTextContent('clean')); expect(screen.getByRole('link', { name: 'Download Mask' })).toBeInTheDocument(); expect(screen.getByRole('link', { name: 'Download Image + Mask' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); await screen.findByRole('dialog', { name: 'Annotation saved' }); await waitFor(() => expect(screen.getByLabelText('Dirty state')).toHaveTextContent('clean')); expect(screen.getByRole('link', { name: 'Download Mask' })).toHaveAttribute('href', '/api/v1/images/image-1/annotation/package?include_image=false'); expect(screen.getByRole('link', { name: 'Download Image + Mask' })).toHaveAttribute('href', '/api/v1/images/image-1/annotation/package?include_image=true'); expect(screen.getByText(/HESTIA revision 1/, { selector: '.revision' })).toBeInTheDocument()
   })
 
   it('uses centralized tool shortcuts, shows shortcut tooltips, and ignores editable targets', async () => {
@@ -134,5 +137,40 @@ describe('annotator class and save state', () => {
     vi.useFakeTimers()
     act(() => vi.advanceTimersByTime(10000))
     expect(screen.getByRole('dialog', { name: 'Replace current annotations?' })).toBeInTheDocument()
+  })
+
+  it('offers to reload from HESTIA when a save conflicts with newer HESTIA edits', async () => {
+    annotation = { ...annotation, revision: 2, saved_revision: 0, hestia_revision: 3 }; saveConflict = true
+    view(); await screen.findByText('Semantic layers')
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('dialog', { name: 'Annotation changed in HESTIA' })).toHaveTextContent('changed in HESTIA after you opened it')
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(screen.getByLabelText('Dirty state')).toHaveTextContent('dirty')
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' })); await screen.findByRole('dialog', { name: 'Annotation changed in HESTIA' })
+    annotation = { ...annotation, revision: 0, saved_revision: 0, hestia_revision: 4 }
+    fireEvent.click(screen.getByRole('button', { name: 'Reload from HESTIA' }))
+    await screen.findByText(/HESTIA revision 4/, { selector: '.revision' })
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(call => String(call[0]) === '/api/v1/annotations' && call[1]?.method === 'POST')).toHaveLength(2)
+    expect(screen.getByLabelText('Dirty state')).toHaveTextContent('clean')
+  })
+
+  it('disables saving when the HESTIA account cannot create or update this annotation', async () => {
+    view(['annotations_create']); await screen.findByText('Semantic layers')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    expect(screen.getByText('View only: your HESTIA account cannot save this annotation.')).toBeInTheDocument()
+    cleanupView(); annotation = { ...annotation, hestia_revision: 2 }
+    view(['annotations_create']); await screen.findByText('Semantic layers')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  })
+
+  it('resumes a stored working copy only while it has unsaved edits', async () => {
+    sessionStorage.setItem('mulan:annotation:image-1', 'ann-1')
+    view(); await screen.findByText('Semantic layers')
+    const posts = () => (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(call => String(call[0]) === '/api/v1/annotations' && call[1]?.method === 'POST').length
+    expect(posts()).toBe(1)
+    cleanupView(); annotation = { ...annotation, revision: 3, saved_revision: 1 }; installFetch(); sessionStorage.setItem('mulan:annotation:image-1', 'ann-1')
+    view(); await screen.findByText('Semantic layers')
+    expect(posts()).toBe(0)
+    expect(screen.getByLabelText('Dirty state')).toHaveTextContent('dirty')
   })
 })

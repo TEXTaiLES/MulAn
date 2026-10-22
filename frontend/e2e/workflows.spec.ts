@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test'
 import { backendUrl } from '../mulan.env.ts'
 
+// The workflows run against a real HESTIA. Sign in on the HESTIA portal, then copy the
+// textailes_refresh_token cookie value into MULAN_E2E_HESTIA_TOKEN.
+const hestiaToken = process.env.MULAN_E2E_HESTIA_TOKEN
+const hestiaCookie = process.env.HESTIA_COOKIE_NAME ?? 'textailes_refresh_token'
+test.skip(!hestiaToken, 'Set MULAN_E2E_HESTIA_TOKEN to a HESTIA session token to run the workflows.')
+test.beforeEach(async ({ context }) => { await context.addCookies([{ name: hestiaCookie, value: hestiaToken!, domain: '127.0.0.1', path: '/' }]) })
+
 function grayscaleBmp(width: number, height: number, value: number): Buffer {
   const rowSize = Math.ceil(width / 4) * 4; const pixelBytes = rowSize * height; const pixelOffset = 54 + 256 * 4; const output = Buffer.alloc(pixelOffset + pixelBytes)
   output.write('BM'); output.writeUInt32LE(output.length, 2); output.writeUInt32LE(pixelOffset, 10); output.writeUInt32LE(40, 14); output.writeInt32LE(width, 18); output.writeInt32LE(height, 22); output.writeUInt16LE(1, 26); output.writeUInt16LE(8, 28); output.writeUInt32LE(pixelBytes, 34); output.writeUInt32LE(256, 46)
@@ -14,7 +21,7 @@ async function makeTiff(): Promise<Buffer> {
   form.append('files', new Blob([grayscaleBmp(32, 24, 20)], { type: 'image/bmp' }), '450.bmp')
   form.append('files', new Blob([grayscaleBmp(32, 24, 140)], { type: 'image/bmp' }), '850.bmp')
   form.append('channel_names', '["450nm","850nm"]'); form.append('response_mode', 'direct'); form.append('output_name', 'sample.tif')
-  const response = await fetch(`${backendUrl}/api/v1/convert/bmp-to-tiff`, { method: 'POST', body: form })
+  const response = await fetch(`${backendUrl}/api/v1/convert/bmp-to-tiff`, { method: 'POST', body: form, headers: { Cookie: `${hestiaCookie}=${hestiaToken}` } })
   expect(response.ok).toBeTruthy(); return Buffer.from(await response.arrayBuffer())
 }
 

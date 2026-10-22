@@ -9,7 +9,8 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-from conftest import add_class, operation, tiff
+from conftest import add_class, annotation_package, operation, tiff
+from fake_hestia import OTHER_TOKEN, TOKEN
 
 
 def read_mask(response):
@@ -144,25 +145,139 @@ def test_mask_metadata_conflict_rejected(client, annotation):
     assert response.get_json()["error"]["code"] == "metadata_conflict"
 
 
-def test_direct_upload_annotation_owns_image(client):
-    response = client.post("/api/v1/annotations", data={"image": tiff(np.zeros((5, 7), np.uint8), "direct.tif")}, content_type="multipart/form-data")
-    assert response.status_code == 201
-    created = response.get_json()
-    assert client.delete(f"/api/v1/annotations/{created['annotation_id']}").status_code == 204
-    assert client.get(f"/api/v1/images/{created['image_id']}").status_code == 404
+def test_opening_an_image_loads_its_hestia_annotation(client, hestia, uploaded_image):
+    image_id = uploaded_image["image_id"]
+    stored_mask = np.zeros((10, 12), np.uint8); stored_mask[2:5, 3:7] = 4
+    classes = [{"id": 0, "name": "Background", "description": "", "color": "#000000"}, {"id": 4, "name": "Thread", "description": "warp", "color": "#43A047"}]
+    hestia.save_annotation(TOKEN, image_id, annotation_package(stored_mask, classes), overwrite=False, expected_revision=None)
+    opened = client.post("/api/v1/annotations", data={"image_id": image_id})
+    assert opened.status_code == 201
+    body = opened.get_json()
+    assert body["hestia_revision"] == 1 and body["revision"] == body["saved_revision"] == 0
+    assert [(item["id"], item["name"]) for item in body["classes"]] == [(0, "Background"), (4, "Thread")]
+    assert "_hestia" not in body
+    mask, _ = read_mask(client.get(f"/api/v1/annotations/{body['annotation_id']}/mask"))
+    np.testing.assert_array_equal(mask, stored_mask)
+    # The next class continues after the highest stored ID.
+    assert add_class(client, body["annotation_id"], "Weft")["id"] == 5
 
 
-def test_exports_json_zip_save_and_overlay(client, annotation, uploaded_image):
-    aid = annotation["annotation_id"]; cls = add_class(client, aid); revision = client.get(f"/api/v1/annotations/{aid}").get_json()["revision"]
-    result = operation(client, aid, revision, "rectangle_add", cls["id"], [{"x": 1, "y": 1}, {"x": 4, "y": 4}]); assert result.status_code == 200
-    saved = client.post(f"/api/internal/v1/annotations/{aid}/save").get_json(); assert saved["revision"] == saved["saved_revision"]
-    overlay = client.get(f"/api/internal/v1/annotations/{aid}/overlay?max_size=100"); assert overlay.status_code == 200 and overlay.content_type == "image/png"
-    exported = client.get(f"/api/v1/annotations/{aid}/export?include_image=true"); assert exported.status_code == 200
+def test_opening_an_unannotated_image_starts_blank(annotation):
+    assert annotation["hestia_revision"] is None
+    assert [item["id"] for item in annotation["classes"]] == [0]
+
+
+def test_opening_requires_image_id_and_annotation_read_access(client, hestia, uploaded_image):
+    assert client.post("/api/v1/annotations").status_code == 400
+    hestia.capabilities[TOKEN]["annotations_read"] = False
+    denied = client.post("/api/v1/annotations", data={"image_id": uploaded_image["image_id"]})
+    assert denied.status_code == 403 and denied.get_json()["error"]["code"] == "forbidden"
+
+
+def test_working_copies_belong_to_the_user_who_opened_them(app, annotation):
+    other = app.test_client()
+    other.set_cookie(app.config["HESTIA_COOKIE_NAME"], OTHER_TOKEN)
+    aid = annotation["annotation_id"]
+    for response in (
+        other.get(f"/api/v1/annotations/{aid}"),
+        other.post(f"/api/v1/annotations/{aid}/classes", json={"name": "Intruder", "color": "#ff0000"}),
+        other.post(f"/api/internal/v1/annotations/{aid}/undo"),
+        other.get(f"/api/internal/v1/annotations/{aid}/overlay"),
+    ):
+        assert response.status_code == 404 and response.get_json()["error"]["code"] == "annotation_not_found"
+
+
+def save(client, annotation_id):
+    return client.post(f"/api/internal/v1/annotations/{annotation_id}/save")
+
+
+def paint(client, annotation_id, class_id, points):
+    revision = client.get(f"/api/v1/annotations/{annotation_id}").get_json()["revision"]
+    response = operation(client, annotation_id, revision, "rectangle_add", class_id, points)
+    assert response.status_code == 200
+    return response.get_json()
+
+
+def test_save_writes_the_package_to_hestia_and_exports_come_from_hestia(client, hestia, annotation, uploaded_image):
+    aid = annotation["annotation_id"]; image_id = uploaded_image["image_id"]; cls = add_class(client, aid)
+    paint(client, aid, cls["id"], [{"x": 1, "y": 1}, {"x": 4, "y": 4}])
+    saved = save(client, aid)
+    assert saved.status_code == 200
+    body = saved.get_json()
+    assert body["revision"] == body["saved_revision"] and body["hestia_revision"] == 1
+    assert f"save_annotation {image_id} overwrite=False expected=None" in hestia.calls
+    stored = hestia.annotations[image_id]
+    assert [item["id"] for item in stored["metadata"]["classes"]] == [0, cls["id"]]
+    with MemoryFile(stored["mask"]) as memory, memory.open() as dataset:
+        assert dataset.read(1)[2, 2] == cls["id"] and dataset.dtypes[0] == "uint8"
+    assert client.get(f"/api/v1/annotations/{aid}").get_json()["hestia_revision"] == 1
+
+    exported = client.get(f"/api/v1/images/{image_id}/annotation/package?include_image=true")
+    assert exported.status_code == 200
     with zipfile.ZipFile(io.BytesIO(exported.data)) as package:
         assert set(package.namelist()) == {"image.tif", "mask.tif", "annotations.json"}
         metadata = json.loads(package.read("annotations.json"))
         assert metadata["format"] == "mulan-semantic-segmentation" and metadata["mask"]["background_id"] == 0
-        assert package.read("image.tif") == client.get(f"/api/v1/images/{uploaded_image['image_id']}/file").data
+        assert package.read("mask.tif") == stored["mask"]
+        assert package.read("image.tif") == client.get(f"/api/v1/images/{image_id}/file").data
+    mask_only = client.get(f"/api/v1/images/{image_id}/annotation/package")
+    with zipfile.ZipFile(io.BytesIO(mask_only.data)) as package:
+        assert set(package.namelist()) == {"mask.tif", "annotations.json"}
+
+    overlay = client.get(f"/api/internal/v1/annotations/{aid}/overlay?max_size=100")
+    assert overlay.status_code == 200 and overlay.content_type == "image/png"
+
+
+def test_later_saves_update_the_hestia_revision_they_started_from(client, hestia, annotation, uploaded_image):
+    aid = annotation["annotation_id"]; image_id = uploaded_image["image_id"]; cls = add_class(client, aid)
+    paint(client, aid, cls["id"], [{"x": 1, "y": 1}, {"x": 2, "y": 2}])
+    assert save(client, aid).get_json()["hestia_revision"] == 1
+    paint(client, aid, cls["id"], [{"x": 5, "y": 5}, {"x": 6, "y": 6}])
+    assert save(client, aid).get_json()["hestia_revision"] == 2
+    assert f"save_annotation {image_id} overwrite=True expected=1" in hestia.calls
+    # Saving again without changes does not create another HESTIA revision.
+    assert save(client, aid).get_json()["hestia_revision"] == 2 and hestia.annotations[image_id]["revision"] == 2
+
+
+def test_save_refuses_to_overwrite_newer_hestia_edits(app, client, hestia, uploaded_image):
+    image_id = uploaded_image["image_id"]
+    mine = client.post("/api/v1/annotations", data={"image_id": image_id}).get_json()
+    other = app.test_client(); other.set_cookie(app.config["HESTIA_COOKIE_NAME"], OTHER_TOKEN)
+    theirs = other.post("/api/v1/annotations", data={"image_id": image_id}).get_json()
+    for user, working_copy in ((other, theirs), (client, mine)):
+        cls = add_class(user, working_copy["annotation_id"])
+        paint(user, working_copy["annotation_id"], cls["id"], [{"x": 1, "y": 1}, {"x": 3, "y": 3}])
+    assert save(other, theirs["annotation_id"]).status_code == 200
+    conflict = save(client, mine["annotation_id"])
+    assert conflict.status_code == 409 and conflict.get_json()["error"]["code"] == "annotation_exists"
+    assert "Reopen the image" in conflict.get_json()["error"]["message"]
+    still_unsaved = client.get(f"/api/v1/annotations/{mine['annotation_id']}").get_json()
+    assert still_unsaved["revision"] != still_unsaved["saved_revision"]
+
+    reopened = client.post("/api/v1/annotations", data={"image_id": image_id}).get_json()
+    assert reopened["hestia_revision"] == 1
+    other_copy = other.post("/api/v1/annotations", data={"image_id": image_id}).get_json()
+    cls = add_class(other, other_copy["annotation_id"], "Later")
+    paint(other, other_copy["annotation_id"], cls["id"], [{"x": 6, "y": 6}, {"x": 7, "y": 7}])
+    assert save(other, other_copy["annotation_id"]).status_code == 200
+    paint(client, reopened["annotation_id"], reopened["classes"][-1]["id"], [{"x": 8, "y": 8}, {"x": 9, "y": 9}])
+    stale = save(client, reopened["annotation_id"])
+    assert stale.status_code == 409 and stale.get_json()["error"]["code"] == "annotation_revision_conflict"
+
+
+def test_save_needs_the_matching_hestia_capability(client, hestia, annotation):
+    aid = annotation["annotation_id"]; cls = add_class(client, aid)
+    paint(client, aid, cls["id"], [{"x": 1, "y": 1}, {"x": 2, "y": 2}])
+    hestia.capabilities[TOKEN]["annotations_create"] = False
+    denied = save(client, aid)
+    assert denied.status_code == 403 and denied.get_json()["error"]["code"] == "forbidden"
+
+
+def test_background_class_cannot_be_renamed(client, annotation):
+    aid = annotation["annotation_id"]
+    renamed = client.patch(f"/api/v1/annotations/{aid}/classes/0", json={"name": "Canvas"})
+    assert renamed.status_code == 409 and renamed.get_json()["error"]["code"] == "background_rename_forbidden"
+    assert client.patch(f"/api/v1/annotations/{aid}/classes/0", json={"color": "#111111"}).status_code == 200
 
 
 def test_georeferencing_copied_and_not_invented(client):

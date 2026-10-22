@@ -6,6 +6,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiFailure } from '../api/client'
 import { UploadDropzone } from '../components/UploadDropzone'
+import { useSession } from '../context/SessionContext'
 import { inferWavelengthName } from '../utils/wavelength'
 
 type Band = { id: string; file: File; channelCount: 1 | 3; names: string[] }
@@ -45,7 +46,7 @@ function SortableBand({ band, index, count, outputStart, error, onMove, onDelete
 }
 
 export function ConvertPage() {
-  const [bands, setBands] = useState<Band[]>([]); const [error, setError] = useState(''); const [bandErrors, setBandErrors] = useState<Record<string, string>>({}); const [busy, setBusy] = useState(false); const addInput = useRef<HTMLInputElement>(null); const navigate = useNavigate()
+  const [bands, setBands] = useState<Band[]>([]); const [error, setError] = useState(''); const [bandErrors, setBandErrors] = useState<Record<string, string>>({}); const [busy, setBusy] = useState(false); const addInput = useRef<HTMLInputElement>(null); const navigate = useNavigate(); const { can } = useSession(); const canStore = can('images_create')
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
   const add = async (files: File[]) => {
     const invalid = files.find(file => !/\.bmp$/i.test(file.name))
@@ -72,11 +73,11 @@ export function ConvertPage() {
       if (reason instanceof ApiFailure && typeof reason.details.file === 'string') setBandErrors(Object.fromEntries(bands.filter(item => item.file.name === reason.details.file).map(item => [item.id, message])))
     } finally { setBusy(false) }
   }
-  if (!bands.length) return <div className="page tool-page"><div className="page-heading"><span className="eyebrow">Converter</span><h1>Convert BMP files to multiband TIFF</h1><p>Grayscale inputs contribute one channel; RGB inputs contribute grouped R, G, B channels.</p></div><UploadDropzone accept=".bmp,image/bmp" multiple title="Drop grayscale or RGB BMP files here" description="All files must have matching dimensions and compatible sample datatypes." onFiles={add} />{error && <p className="error" role="alert">{error}</p>}</div>
+  if (!bands.length) return <div className="page tool-page"><div className="page-heading"><span className="eyebrow">Converter</span><h1>Convert BMP files to multiband TIFF</h1><p>Grayscale inputs contribute one channel; RGB inputs contribute grouped R, G, B channels. The TIFF is saved to HESTIA as a new image.</p></div>{!canStore && <p className="notice" role="status">Your HESTIA account cannot add images, so converted TIFFs cannot be saved.</p>}<UploadDropzone accept=".bmp,image/bmp" multiple title="Drop grayscale or RGB BMP files here" description="All files must have matching dimensions and compatible sample datatypes." onFiles={add} />{error && <p className="error" role="alert">{error}</p>}</div>
   let outputStart = 0
   return <div className="page tool-page"><div className="page-heading compact"><span className="eyebrow">Converter</span><h1>Set channel group order</h1><p>Drag rows or use the arrow buttons. RGB channels remain grouped in R, G, B order.</p><p className="conversion-summary" role="status" aria-label="Output channel count"><strong>{outputCount}</strong> output {outputCount === 1 ? 'channel' : 'channels'} from {bands.length} {bands.length === 1 ? 'file' : 'files'}</p></div>
     {error && <p className="error" role="alert">{error}</p>}
     <div className="band-order-layout"><DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dragEnd}><SortableContext items={ids} strategy={verticalListSortingStrategy}><div className="band-list">{bands.map((band, index) => { const start = outputStart; outputStart += band.channelCount; return <SortableBand key={band.id} band={band} index={index} count={bands.length} outputStart={start} error={bandErrors[band.id]} onMove={move} onDelete={() => setBands(items => items.filter(item => item.id !== band.id))} onName={(nameIndex, name) => setBands(items => items.map(item => item.id === band.id ? { ...item, names: item.names.map((value, itemIndex) => itemIndex === nameIndex ? name : value) } : item))} /> })}</div></SortableContext></DndContext><aside className="wavelength-guide" aria-label="Wavelength order: lower to higher"><span>Lower<small>wavelength / nm</small></span><ArrowDown aria-hidden="true" /><span>Higher<small>wavelength / nm</small></span></aside></div>
-    <div className="action-row"><button className="secondary" onClick={() => addInput.current?.click()}><Plus />Add more bands</button><input ref={addInput} className="visually-hidden" aria-label="Add more BMP files" type="file" accept=".bmp,image/bmp" multiple onChange={event => add(Array.from(event.target.files || []))} /><button className="primary large" disabled={busy || !bands.length} onClick={convert}>{busy ? 'Converting…' : 'Convert to TIF'}</button></div>
+    <div className="action-row"><button className="secondary" onClick={() => addInput.current?.click()}><Plus />Add more bands</button><input ref={addInput} className="visually-hidden" aria-label="Add more BMP files" type="file" accept=".bmp,image/bmp" multiple onChange={event => add(Array.from(event.target.files || []))} />{!canStore && <span className="notice inline" role="status">Your HESTIA account cannot add images.</span>}<button className="primary large" disabled={busy || !bands.length || !canStore} title={canStore ? 'Convert and save to HESTIA' : 'Your HESTIA account cannot add images'} onClick={convert}>{busy ? 'Converting…' : 'Convert to TIF'}</button></div>
   </div>
 }

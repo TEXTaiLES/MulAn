@@ -14,7 +14,7 @@ from . import create_app
 
 def main() -> None:
     load_dotenv()
-    port = int(os.environ.get("MULAN_PORT", "5000"))
+    port = int(os.environ.get("MULAN_PORT", "5001"))
     create_app().run(host="127.0.0.1", port=port, debug=True)
 
 
