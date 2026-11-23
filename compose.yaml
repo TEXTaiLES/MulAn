@@ -2,7 +2,8 @@ services:
   mulan:
     build: .
     ports:
-      - "${MULAN_PORT:-5001}:${MULAN_PORT:-5001}"
+      # Reachable only from this machine (http://localhost:5001).
+      - "127.0.0.1:${MULAN_PORT:-5001}:${MULAN_PORT:-5001}"
     environment:
       MULAN_PORT: ${MULAN_PORT:-5001}
       MULAN_DATA_DIR: /data

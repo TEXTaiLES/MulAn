@@ -1,0 +1,22 @@
+# Production overlay for the TEXTaiLES server. Loaded on top of compose.yaml
+# when the server's .env contains:
+#   COMPOSE_FILE=compose.yaml:compose.production.yaml
+# Puts MulAn on the shared `textailes` network (to reach the HESTIA API) and
+# registers it with Traefik, the same way as Thoth.
+services:
+  mulan:
+    networks:
+      - default
+      - textailes
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=textailes"
+      - "traefik.http.routers.mulan.entrypoints=websecure"
+      - "traefik.http.routers.mulan.rule=Host(`mulan.textailes.athenarc.gr`)"
+      - "traefik.http.routers.mulan.tls.certresolver=le"
+      - "traefik.http.services.mulan.loadbalancer.server.port=${MULAN_PORT:-5001}"
+
+networks:
+  textailes:
+    external: true
+    name: textailes
